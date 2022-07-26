@@ -802,7 +802,7 @@ class Suivreuncolis extends eqLogic {
         $cmd->setDisplay('showIconAndNamedashboard', 0);
         $cmd->setDisplay('showIconAndNamemobile', 0);
         $cmd->setIsHistorized(0);
-        $cmd->setIsVisible(0);
+        $cmd->setIsVisible(1);
         $cmd->save();
 
 
