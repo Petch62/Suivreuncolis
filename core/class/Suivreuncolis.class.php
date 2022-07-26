@@ -129,7 +129,64 @@ class Suivreuncolis extends eqLogic {
     }
   
   
-  
+    function DHLRecupere ($NumEnvoi) {
+
+        $apikey = config::byKey('api_dhl', 'suivreuncolis');
+
+        if ($apikey == ''){
+            log::add('Suivreuncolis', 'error', 'Api key DHL manquante'.$apikey );
+            return array("","","","","");
+        }
+
+
+        $ch = curl_init();
+
+        curl_setopt($ch, CURLOPT_URL,"https://api-eu.dhl.com/track/shipments?trackingNumber=$NumEnvoi");
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
+        curl_setopt($ch,CURLOPT_HTTPHEADER,array('Accept: application/json','DHL-API-Key:'.$apikey));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+        if( ! $server_output = curl_exec($ch)) {
+
+            log::add('Suivreuncolis', 'debug', 'httperror DHL' . "https://api-eu.dhl.com/track/shipments?trackingNumber=$NumEnvoi");
+
+            return array("","","","");
+        }else{
+
+            $data = json_decode($server_output, true);
+
+            if ($data['shipments'][0]['id'] != '0' ){
+
+                log::add('Suivreuncolis', 'debug', '    debug info decompile '.$server_output);
+
+                $monitem = $data['shipments'][0]['events'][0];
+                $dh = str_replace('T',' ',str_replace('T00:00:00','',$monitem['timestamp']));
+                $msg = $monitem['description'];
+                $lieu = $monitem['location']['address']['addressLocality'];
+                $statusbrut = $monitem['code'];
+
+                if ($statusbrut == '') $codetat = 10;
+
+                log::add('Suivreuncolis', 'debug', '    debug status '.$statusbrut);
+
+                return array($msg,$lieu,$dh,$codetat,$msg);
+
+            }else{
+              	$test=strval($data['returnCode']);
+                log::add('Suivreuncolis', 'debug', 'httpok DHL code error'. $test );
+                $msg = $data['returnMessage'];
+                $codetat = 50;
+                $lieu = '';
+                $dh = '';
+                //return array($msg,$lieu,$dh,$codetat,$msg);
+                return array('','','');
+            }
+
+        }
+
+
+        return array('','','');
+    }  
   
   
   
@@ -317,7 +374,11 @@ class Suivreuncolis extends eqLogic {
         if ( $etat_ == 'SIGNIN_EXC') {
             return array("Echec de livraison",'',$date_,35,$description);
         }
-
+      
+        if ( $etat_ == 'CC_IM_SUCCESS') {
+            return array("Dédouanement réussi",'',$date_,10,$description);
+        }
+      
         if ( $etat_ == 'SHIPPING') {
             return array("Preparation de la commande ",'',$date_,5,$description);
         }
@@ -404,6 +465,7 @@ class Suivreuncolis extends eqLogic {
         log::add('Suivreuncolis', 'debug', 'majcmdEquipement '.$nom);
 
         //Simplification de la mise à jour des commandes
+		$newAlert = 0;
         if ($suivreUnColis->checkAndUpdateCmd('lieu', $lieu)){
           log::add('Suivreuncolis', 'debug', 'majcmdEquipement New lieu : '.$lieu);
         }
@@ -414,6 +476,7 @@ class Suivreuncolis extends eqLogic {
           log::add('Suivreuncolis', 'debug', 'majcmdEquipement New etat : '.$etat);
         }
         if($suivreUnColis->checkAndUpdateCmd('msgtransporteur', $msgtransporteur)){
+			$newAlert = 1;
         	log::add('Suivreuncolis', 'debug', 'majcmdEquipement New msgtransporteur : '.$msgtransporteur);
         }
         
@@ -425,7 +488,7 @@ class Suivreuncolis extends eqLogic {
             $cmd = $suivreUnColis->getCmd('info', 'codeetat');
         }
 
-        if ($cmd->execCmd() != $codeetat){
+        if ($cmd->execCmd() != $codeetat or $newAlert == 1){
 
             log::add('Suivreuncolis', 'debug', 'notif '.$notif);
             if ($notif == "jeedom_msg"){
@@ -511,8 +574,12 @@ class Suivreuncolis extends eqLogic {
                         Suivreuncolis::majcmdEquipement($suivreUnColis,$etat,$lieu,$dateheure,$codeetat,$msgtransporteur);
                         break;
                     case "aliexpress":
+                        list($etat,$lieu,$dateheure,$codeetat,$msgtransporteur) = Suivreuncolis::LaPosteRecupere($numcolis);
+                        if ($etat != ''){
+                        	Suivreuncolis::majcmdEquipement($suivreUnColis,$etat,$lieu,$dateheure,$codeetat,$msgtransporteur);
+                        }else{
                         list($etat,$lieu,$dateheure,$codeetat,$msgtransporteur) = Suivreuncolis::AliexpressShippingRecupere($numcolis);
-                        Suivreuncolis::majcmdEquipement($suivreUnColis,$etat,$lieu,$dateheure,$codeetat,$msgtransporteur);
+                        Suivreuncolis::majcmdEquipement($suivreUnColis,$etat,$lieu,$dateheure,$codeetat,$msgtransporteur);}
                         break;
                     case "laposte":
                         list($etat,$lieu,$dateheure,$codeetat,$msgtransporteur) = Suivreuncolis::LaPosteRecupere($numcolis);
@@ -524,6 +591,10 @@ class Suivreuncolis extends eqLogic {
                         list($etat,$lieu,$dateheure,$codeetat,$msgtransporteur) = Suivreuncolis::UPSRecupere($numcolis);
                         Suivreuncolis::majcmdEquipement($suivreUnColis,$etat,$lieu,$dateheure,$codeetat,$msgtransporteur);
                         break;
+                    case "DHL":
+                        list($etat,$lieu,$dateheure,$codeetat,$msgtransporteur) = Suivreuncolis::DHLRecupere($numcolis);
+                        Suivreuncolis::majcmdEquipement($suivreUnColis,$etat,$lieu,$dateheure,$codeetat,$msgtransporteur);
+                        break;                    
                 }
             }
         }
@@ -655,7 +726,10 @@ class Suivreuncolis extends eqLogic {
         //Suivreuncolis::MAJColis();
      }
 
-
+    //* Fonction exécutée automatiquement toutes les heures par Jeedom
+    public static function cron30() {
+        Suivreuncolis::MAJColis();
+    }
     //* Fonction exécutée automatiquement toutes les heures par Jeedom
     public static function cronHourly() {
         Suivreuncolis::MAJColis();
@@ -728,7 +802,7 @@ class Suivreuncolis extends eqLogic {
         $cmd->setDisplay('showIconAndNamedashboard', 0);
         $cmd->setDisplay('showIconAndNamemobile', 0);
         $cmd->setIsHistorized(0);
-        $cmd->setIsVisible(1);
+        $cmd->setIsVisible(0);
         $cmd->save();
 
 
